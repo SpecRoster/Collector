@@ -42,5 +42,31 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      # Each collect handler drives its ecosystem's own coverage tool, and
+      # each test SKIPS when that tool is absent. A skip is indistinguishable
+      # from a pass in the summary line, so without these installs the job
+      # goes green while testing nothing — which is worse than red, because
+      # nobody looks again. The check at the end refuses to let that happen.
+      - name: Toolchains
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --upgrade coverage
+          gem install --no-document bundler
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+
       - name: Test (collect handlers)
-        run: go test -timeout 30m ./collect/...
+        run: go test -v -timeout 30m ./collect/... 2>&1 | tee /tmp/collect.log
+
+      # A skipped ecosystem means this job did not test what its green check
+      # implies. Fail, and name what was skipped, so the fix is either the
+      # missing toolchain or a deliberate decision recorded here.
+      - name: No silent skips
+        run: |
+          set -euo pipefail
+          if grep -E "^\s*--- SKIP" /tmp/collect.log; then
+            echo "::error::collect tests skipped — the toolchain is missing, so this job proved nothing for those ecosystems"
+            exit 1
+          fi
+          echo "no skips: every collect handler actually ran"
