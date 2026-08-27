@@ -48,13 +48,19 @@ jobs:
       # from a pass in the summary line, so without these installs the job
       # goes green while testing nothing — which is worse than red, because
       # nobody looks again. The check at the end refuses to let that happen.
+      # cargo-llvm-cov via the prebuilt installer — `cargo install` builds it
+      # from source and costs minutes on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
       - name: Toolchains
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --upgrade coverage
-          gem install --no-document bundler
+          # System gem dir is not writable by the runner user.
+          sudo gem install --no-document bundler
           rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov --locked
 
       - name: Test (collect handlers)
         run: go test -v -timeout 30m ./collect/... 2>&1 | tee /tmp/collect.log
