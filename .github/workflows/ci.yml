@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and vet
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
+          fi
+
+      # The fast set: adapters, coverage vocabulary, ID normalization, and
+      # the dispatch surface. No language toolchains required.
+      - name: Test (fast)
+        run: go test ./runner/... ./covtypes/... ./testid/... ./cmd/...
+
+      # collect/ drives real sample projects through each ecosystem's own
+      # coverage tool, so it needs node/ruby/.NET/PHP/Rust and does cold
+      # dependency installs. Slow and toolchain-heavy — kept separate so a
+      # normal PR is not gated on it.
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test (collect handlers)
+        run: go test -timeout 30m ./collect/...

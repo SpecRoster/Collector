@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# The commit MESSAGE is history too, and survives a change to the file.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)"
+. .githooks/_scan.sh
+RE="$(partner_regex)" || exit 1
+
+if bad=$(grep -inE "$RE" "$1"); then
+  echo "BLOCKED: commit message names a partner:" >&2
+  printf '%s\n' "$bad" | sed 's/^/    /' >&2
+  echo >&2
+  echo "Describe the change without naming them — \"a design partner\" is enough." >&2
+  exit 1
+fi

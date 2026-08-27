@@ -1,0 +1,55 @@
+# Collector binary releases.
+#
+# Customers' nightly coverage workflows run specroster-collect as a
+# standalone binary (it is a Go program; customers do not have Go
+# toolchains). The coverage action downloads the asset matching the runner's
+# OS/arch and verifies it against SHA256SUMS before executing it.
+#
+# This releases to ITS OWN repository, so it needs no cross-repo PAT — the
+# default GITHUB_TOKEN is enough. The previous arrangement published from
+# the private monorepo into a different public repo, which required a
+# fine-grained token that was never actually configured.
+#
+# Trigger: push a tag like v1.0.0
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cross-compile
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for os in linux darwin windows; do
+            for arch in amd64 arm64; do
+              ext=""; [ "$os" = "windows" ] && ext=".exe"
+              CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+                go build -trimpath -ldflags="-s -w" \
+                  -o "dist/specroster-collect_${os}_${arch}${ext}" ./cmd/specroster-collect
+            done
+          done
+          # Explicit prefix, not '*': `sha256sum *` is self-referential if
+          # dist/ is ever reused or cached.
+          (cd dist && sha256sum specroster-collect_* > SHA256SUMS)
+          ls -la dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "specroster-collect $GITHUB_REF_NAME" \
+            --notes "SpecRoster coverage collector — every supported runner via -runner (pytest, gotest, dotnet, jest, junit, rspec, cargo, phpunit). Built from ${GITHUB_SHA}. Verify downloads against SHA256SUMS."

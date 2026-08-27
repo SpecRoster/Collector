@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Refuse to commit partner-identifying content, or a mapping of anyone's
+# source tree. See .githooks/_scan.sh for why.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)"
+. .githooks/_scan.sh
+RE="$(partner_regex)" || exit 1
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+fail=0
+
+if bad=$(printf '%s\n' "$staged" | grep -nE "$FORBIDDEN_ARTIFACTS"); then
+  echo "BLOCKED: refusing to commit a coverage/test-result artifact:" >&2
+  printf '%s\n' "$bad" | sed 's/^/    /' >&2
+  echo "  These enumerate a source tree wholesale. Generate them at test time instead." >&2
+  fail=1
+fi
+
+if bad=$(printf '%s\n' "$staged" | grep -iE "$RE"); then
+  echo "BLOCKED: staged file PATH matches a partner name:" >&2
+  printf '%s\n' "$bad" | sed 's/^/    /' >&2
+  fail=1
+fi
+
+# Added/changed lines only — never the surrounding context, or a rename
+# near an old line would trip on something already reviewed.
+if bad=$(git diff --cached -U0 --diff-filter=ACMR | grep -E '^\+' | grep -v '^+++' | grep -inE "$RE"); then
+  echo "BLOCKED: staged CONTENT matches a partner name:" >&2
+  printf '%s\n' "$bad" | head -20 | sed 's/^/    /' >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo >&2
+  echo "Nothing identifying a partner belongs in this repository — including" >&2
+  echo "class names, namespaces, and descriptions of their CI topology." >&2
+  echo "Generalize it. Override only if you are certain: git commit --no-verify" >&2
+  exit 1
+fi
