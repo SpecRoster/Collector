@@ -57,7 +57,7 @@ jobs:
       - name: Toolchains
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet --upgrade coverage
+          python3 -m pip install --quiet --upgrade coverage pytest
           # System gem dir is not writable by the runner user.
           sudo gem install --no-document bundler
           rustup component add llvm-tools-preview
