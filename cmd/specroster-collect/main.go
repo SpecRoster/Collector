@@ -44,6 +44,7 @@ func main() {
 	timings := flag.String("timings", "timings.json", "per-test duration output path (dotnet)")
 	covMode := flag.String("cov-mode", "msbuild", "coverage mode: msbuild | collector (dotnet)")
 	filter := flag.String("filter", "", "VSTest --filter to scope collected tests (dotnet)")
+	framework := flag.String("framework", "", "target framework to collect against, e.g. net8.0 (dotnet; REQUIRED for multi-targeting projects)")
 	listOnly := flag.Bool("list-only", false, "list the test inventory to -collected and exit without collecting coverage (incremental planning; dotnet)")
 	only := flag.String("only", "", "path to a file of canonical test IDs, one per line: collect coverage for ONLY these, while still reporting the full inventory (incremental snapshots; dotnet)")
 	jobs := flag.Int("jobs", dotnetcover.DefaultJobs(), "tests to cover concurrently (dotnet)")
@@ -56,12 +57,12 @@ func main() {
 	pytestArgs := flag.String("pytest-args", "", "extra arguments passed to pytest, whitespace-split (pytest)")
 	flag.Parse()
 
-	if err := dispatch(*runner, *dir, *repoRoot, *out, *collected, *project, *timings, *covMode, *filter, *only, *listOnly, *jobs, *sourceRoot, *phpunitBin, *python, *pytestArgs); err != nil {
+	if err := dispatch(*runner, *dir, *repoRoot, *out, *collected, *project, *timings, *covMode, *filter, *only, *framework, *listOnly, *jobs, *sourceRoot, *phpunitBin, *python, *pytestArgs); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func dispatch(runner, dir, repoRoot, out, collected, project, timings, covMode, filter, only string, listOnly bool, jobs int, sourceRoot, phpunitBin, python, pytestArgs string) error {
+func dispatch(runner, dir, repoRoot, out, collected, project, timings, covMode, filter, only, framework string, listOnly bool, jobs int, sourceRoot, phpunitBin, python, pytestArgs string) error {
 	switch runner {
 	case "pytest":
 		if only != "" || listOnly {
@@ -77,7 +78,7 @@ func dispatch(runner, dir, repoRoot, out, collected, project, timings, covMode, 
 		if repoRoot == "" {
 			repoRoot = "." // dotnetcover's historical default
 		}
-		return dotnetcover.Run(project, repoRoot, out, collected, timings, covMode, filter, only, listOnly, jobs)
+		return dotnetcover.Run(project, repoRoot, out, collected, timings, covMode, filter, only, framework, listOnly, jobs)
 	case "jest":
 		if only != "" || listOnly {
 			return fmt.Errorf("-only/-list-only are not supported for -runner jest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")

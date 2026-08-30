@@ -106,7 +106,7 @@ func TestMatchFilter(t *testing.T) {
 }
 
 func TestRun_InvalidCovMode(t *testing.T) {
-	if err := run("x", ".", "o.json", "c.txt", "t.json", "lcov", "", "", false, 1); err == nil {
+	if err := run("x", ".", "o.json", "c.txt", "t.json", "lcov", "", "", "", false, 1); err == nil {
 		t.Fatal("want error for invalid -cov-mode")
 	}
 }

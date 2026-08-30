@@ -46,8 +46,8 @@ import (
 
 // Run collects per-test coverage for the .NET test project(s), writing the
 // coverage JSON, collected test list, and per-test timings.
-func Run(project, repoRoot, out, collected, timings, covMode, filter, only string, listOnly bool, jobs int) error {
-	return run(project, repoRoot, out, collected, timings, covMode, filter, only, listOnly, jobs)
+func Run(project, repoRoot, out, collected, timings, covMode, filter, only, framework string, listOnly bool, jobs int) error {
+	return run(project, repoRoot, out, collected, timings, covMode, filter, only, framework, listOnly, jobs)
 }
 
 // DefaultJobs is the default -jobs concurrency (exported for the cmd wrappers).
@@ -68,7 +68,7 @@ func defaultJobs() int {
 	return n
 }
 
-func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter, onlyPath string, listOnly bool, jobs int) error {
+func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter, onlyPath, framework string, listOnly bool, jobs int) error {
 	if jobs < 1 {
 		jobs = 1
 	}
@@ -116,11 +116,17 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 	var natives []string
 	total, failures := 0, 0
 	for _, proj := range projects {
+		tfm, err := resolveFramework(proj, framework)
+		if err != nil {
+			return err
+		}
+
 		// One build per project up front; per-test runs reuse it (--no-build).
-		if out, err := exec.Command("dotnet", "build", proj, "--nologo", "-v", "q").CombinedOutput(); err != nil {
+		buildArgs := append([]string{"build", proj, "--nologo", "-v", "q"}, frameworkArgs(tfm)...)
+		if out, err := exec.Command("dotnet", buildArgs...).CombinedOutput(); err != nil {
 			return fmt.Errorf("dotnet build %s: %w\n%s", proj, err, out)
 		}
-		fqns, err := listTests(proj, filter)
+		fqns, err := listTests(proj, filter, tfm)
 		if err != nil {
 			return err
 		}
@@ -151,7 +157,7 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 				}
 			}
 		}
-		covered, failed := coverProject(proj, toCover, absRoot, covMode, jobs, &doc, timings.DurationsMs)
+		covered, failed := coverProject(proj, toCover, absRoot, covMode, tfm, jobs, &doc, timings.DurationsMs)
 		failures += failed
 		fmt.Fprintf(os.Stderr, "project %s: covered %d/%d discovered (%d failed)\n", proj, covered, len(fqns), failed)
 	}
@@ -217,7 +223,7 @@ type coverResult struct {
 // (per-test coverage is N independent `dotnet test` runs — the bottleneck).
 // Results are merged on the calling goroutine, so doc/natives/timings need no
 // locking. A test that fails to cover is logged and skipped, not fatal.
-func coverProject(project string, fqns []string, absRoot, covMode string, jobs int,
+func coverProject(project string, fqns []string, absRoot, covMode, tfm string, jobs int,
 	doc *dotnet.CoverJSON, timings map[string]int64) (covered, failed int) {
 
 	work := make(chan string)
@@ -228,7 +234,7 @@ func coverProject(project string, fqns []string, absRoot, covMode string, jobs i
 		go func() {
 			defer wg.Done()
 			for fqn := range work {
-				files, dur, err := coverOneTest(project, fqn, absRoot, covMode)
+				files, dur, err := coverOneTest(project, fqn, absRoot, covMode, tfm)
 				results <- coverResult{fqn, files, dur, err}
 			}
 		}()
@@ -304,12 +310,13 @@ func discoverTestProjects(root string) ([]string, error) {
 // names after the "The following Tests are available:" banner. Default
 // xUnit display names ARE the FQN (theories carry "(args)", stripped and
 // deduped here).
-func listTests(project, filter string) ([]string, error) {
+func listTests(project, filter, tfm string) ([]string, error) {
 	// NOTE: `dotnet test --list-tests` does NOT honor --filter (it returns an
 	// empty list when a filter is present, depending on the test host). So we
 	// always list everything and apply the filter in Go (matchFilter). The
 	// per-test RUN still uses --filter, which works for running.
-	out, err := exec.Command("dotnet", "test", project, "--list-tests", "--no-build", "--nologo", "-v", "q").CombinedOutput()
+	args := append([]string{"test", project, "--list-tests", "--no-build", "--nologo", "-v", "q"}, frameworkArgs(tfm)...)
+	out, err := exec.Command("dotnet", args...).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("dotnet test --list-tests: %w\n%s", err, out)
 	}
@@ -380,7 +387,7 @@ func splitFQN(fqn string) (class, method string, ok bool) {
 // repo-relative file → covered lines, plus the test's own duration in ms
 // (parsed from the .trx, so it excludes dotnet host startup — the number that
 // matters for "what fits in a time budget").
-func coverOneTest(project, fqn, absRoot, covMode string) (map[string][]int, int64, error) {
+func coverOneTest(project, fqn, absRoot, covMode, tfm string) (map[string][]int, int64, error) {
 	tmp, err := os.MkdirTemp("", "trdotnet-*")
 	if err != nil {
 		return nil, 0, err
@@ -392,6 +399,7 @@ func coverOneTest(project, fqn, absRoot, covMode string) (map[string][]int, int6
 		"--filter", "FullyQualifiedName~" + fqn,
 		"--results-directory", tmp,
 		"--logger", "trx;LogFileName=results.trx"}
+	args = append(args, frameworkArgs(tfm)...)
 
 	var files map[string][]int
 	if covMode == "collector" {
@@ -647,4 +655,53 @@ func readOnly(path string) (map[string]struct{}, error) {
 		}
 	}
 	return only, nil
+}
+
+// frameworkArgs renders the target-framework selector, or nothing when the
+// project targets exactly one.
+func frameworkArgs(tfm string) []string {
+	if tfm == "" {
+		return nil
+	}
+	return []string{"-f", tfm}
+}
+
+// resolveFramework decides which target framework to drive a project with.
+//
+// A multi-targeting project — most serious .NET libraries — builds every
+// framework in its list unless told otherwise. That is slow at best, and on
+// a machine without every SDK installed it fails outright or lists no tests,
+// which surfaced as the useless "no tests discovered". Worse, discovering
+// nothing looks identical to a project with no tests.
+//
+// So: honour an explicit choice, accept a single-target project as-is, and
+// REFUSE a multi-target project with no choice made — naming the frameworks
+// found, because the fix is for the caller to pick one and there is no safe
+// default. Picking silently would collect coverage against a framework the
+// customer does not ship.
+func resolveFramework(project, requested string) (string, error) {
+	if requested != "" {
+		return requested, nil
+	}
+	out, err := exec.Command("dotnet", "msbuild", project, "-getProperty:TargetFrameworks", "-v:q", "--nologo").Output()
+	if err != nil {
+		// Older SDKs lack -getProperty. Carry on as a single-target project:
+		// the build will say so more clearly than we can here.
+		return "", nil
+	}
+	list := strings.TrimSpace(string(out))
+	if list == "" {
+		return "", nil // single-target
+	}
+	var tfms []string
+	for _, f := range strings.Split(list, ";") {
+		if f = strings.TrimSpace(f); f != "" {
+			tfms = append(tfms, f)
+		}
+	}
+	if len(tfms) <= 1 {
+		return strings.Join(tfms, ""), nil
+	}
+	return "", fmt.Errorf("%s targets %d frameworks (%s); pass -framework to choose one — collecting against the wrong framework would profile code you do not ship",
+		project, len(tfms), strings.Join(tfms, ", "))
 }

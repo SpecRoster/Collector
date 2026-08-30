@@ -30,7 +30,7 @@ func TestCollectorEndToEnd(t *testing.T) {
 	timPath := filepath.Join(tmp, "timings.json")
 
 	// No -project: discovery must find BOTH test projects and merge them.
-	if err := run("", "testdata/sample", covPath, colPath, timPath, "msbuild", "", "", false, 2); err != nil {
+	if err := run("", "testdata/sample", covPath, colPath, timPath, "msbuild", "", "", "", false, 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestOnlyCollectsSubsetButReportsFullInventory(t *testing.T) {
 	if err := os.WriteFile(onlyPath, []byte(target+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", onlyPath, false, 2); err != nil {
+	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", onlyPath, "", false, 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestListOnlyProducesInventoryWithoutCollecting(t *testing.T) {
 	colPath := filepath.Join(tmp, "collected.txt")
 
 	start := time.Now()
-	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", "", true, 2); err != nil {
+	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", "", "", true, 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	listing := time.Since(start)
