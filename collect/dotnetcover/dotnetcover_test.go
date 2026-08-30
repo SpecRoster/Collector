@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SpecRoster/Collector/runner/dotnet"
 )
@@ -29,7 +30,7 @@ func TestCollectorEndToEnd(t *testing.T) {
 	timPath := filepath.Join(tmp, "timings.json")
 
 	// No -project: discovery must find BOTH test projects and merge them.
-	if err := run("", "testdata/sample", covPath, colPath, timPath, "msbuild", "", "", 2); err != nil {
+	if err := run("", "testdata/sample", covPath, colPath, timPath, "msbuild", "", "", false, 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -144,7 +145,7 @@ func TestOnlyCollectsSubsetButReportsFullInventory(t *testing.T) {
 	if err := os.WriteFile(onlyPath, []byte(target+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", onlyPath, 2); err != nil {
+	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", onlyPath, false, 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -176,4 +177,44 @@ func TestOnlyCollectsSubsetButReportsFullInventory(t *testing.T) {
 	if lines <= 1 {
 		t.Errorf("inventory has %d entries, want the whole suite — a subset run must still report every test that exists", lines)
 	}
+}
+
+// TestListOnlyProducesInventoryWithoutCollecting covers the cheap half of the
+// asymmetry incremental snapshots rest on. The server cannot plan which slice
+// of a suite went stale until it knows the whole suite, and paying a full
+// collection to find that out would defeat the entire feature.
+func TestListOnlyProducesInventoryWithoutCollecting(t *testing.T) {
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip("dotnet SDK not on PATH")
+	}
+	if testing.Short() {
+		t.Skip("short mode")
+	}
+	tmp := t.TempDir()
+	covPath := filepath.Join(tmp, "coverage.json")
+	colPath := filepath.Join(tmp, "collected.txt")
+
+	start := time.Now()
+	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", "", true, 2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	listing := time.Since(start)
+
+	raw, err := os.ReadFile(colPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.TrimSpace(l) != "" {
+			names = append(names, l)
+		}
+	}
+	if len(names) < 2 {
+		t.Errorf("inventory has %d entries, want the whole sample suite: %v", len(names), names)
+	}
+	if _, err := os.Stat(covPath); err == nil {
+		t.Error("a list-only pass wrote a coverage file; it must not pretend to have collected anything")
+	}
+	t.Logf("listed %d tests in %s without collecting", len(names), listing.Round(time.Millisecond))
 }

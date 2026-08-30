@@ -46,8 +46,8 @@ import (
 
 // Run collects per-test coverage for the .NET test project(s), writing the
 // coverage JSON, collected test list, and per-test timings.
-func Run(project, repoRoot, out, collected, timings, covMode, filter, only string, jobs int) error {
-	return run(project, repoRoot, out, collected, timings, covMode, filter, only, jobs)
+func Run(project, repoRoot, out, collected, timings, covMode, filter, only string, listOnly bool, jobs int) error {
+	return run(project, repoRoot, out, collected, timings, covMode, filter, only, listOnly, jobs)
 }
 
 // DefaultJobs is the default -jobs concurrency (exported for the cmd wrappers).
@@ -68,7 +68,7 @@ func defaultJobs() int {
 	return n
 }
 
-func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter, onlyPath string, jobs int) error {
+func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter, onlyPath string, listOnly bool, jobs int) error {
 	if jobs < 1 {
 		jobs = 1
 	}
@@ -137,7 +137,13 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 		}
 
 		toCover := fqns
-		if only != nil {
+		if listOnly {
+			// Inventory without collection. This is what makes incremental
+			// planning possible: the server needs to know the whole suite
+			// before it can say which slice of it went stale, and listing is
+			// orders of magnitude cheaper than collecting.
+			toCover = nil
+		} else if only != nil {
 			toCover = toCover[:0:0]
 			for _, fqn := range fqns {
 				if _, want := only[fqn]; want {
@@ -155,11 +161,16 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 	if failures > 0 {
 		fmt.Fprintf(os.Stderr, "WARNING: %d test(s) failed to cover and were skipped (e.g. need infrastructure); coverage is partial\n", failures)
 	}
-	if len(doc.Tests) == 0 && (only == nil || len(only) > 0) {
+	if len(doc.Tests) == 0 && !listOnly && (only == nil || len(only) > 0) {
 		// With -only naming zero tests there is genuinely nothing to collect:
 		// the suite is unchanged and fully profiled. That is the success case
 		// for an incremental run, not a misconfiguration.
 		return fmt.Errorf("no tests produced coverage (%d discovered, all failed) — check -cov-mode and that the project references the matching coverlet package", total)
+	}
+
+	if listOnly {
+		sort.Strings(natives)
+		return os.WriteFile(collectedPath, []byte(strings.Join(natives, "\n")+"\n"), 0o644)
 	}
 
 	f, err := os.Create(outPath)

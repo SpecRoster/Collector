@@ -44,6 +44,7 @@ func main() {
 	timings := flag.String("timings", "timings.json", "per-test duration output path (dotnet)")
 	covMode := flag.String("cov-mode", "msbuild", "coverage mode: msbuild | collector (dotnet)")
 	filter := flag.String("filter", "", "VSTest --filter to scope collected tests (dotnet)")
+	listOnly := flag.Bool("list-only", false, "list the test inventory to -collected and exit without collecting coverage (incremental planning; dotnet)")
 	only := flag.String("only", "", "path to a file of canonical test IDs, one per line: collect coverage for ONLY these, while still reporting the full inventory (incremental snapshots; dotnet)")
 	jobs := flag.Int("jobs", dotnetcover.DefaultJobs(), "tests to cover concurrently (dotnet)")
 	// junit only
@@ -55,51 +56,51 @@ func main() {
 	pytestArgs := flag.String("pytest-args", "", "extra arguments passed to pytest, whitespace-split (pytest)")
 	flag.Parse()
 
-	if err := dispatch(*runner, *dir, *repoRoot, *out, *collected, *project, *timings, *covMode, *filter, *only, *jobs, *sourceRoot, *phpunitBin, *python, *pytestArgs); err != nil {
+	if err := dispatch(*runner, *dir, *repoRoot, *out, *collected, *project, *timings, *covMode, *filter, *only, *listOnly, *jobs, *sourceRoot, *phpunitBin, *python, *pytestArgs); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func dispatch(runner, dir, repoRoot, out, collected, project, timings, covMode, filter, only string, jobs int, sourceRoot, phpunitBin, python, pytestArgs string) error {
+func dispatch(runner, dir, repoRoot, out, collected, project, timings, covMode, filter, only string, listOnly bool, jobs int, sourceRoot, phpunitBin, python, pytestArgs string) error {
 	switch runner {
 	case "pytest":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner pytest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner pytest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return pytestcover.Run(dir, python, pytestArgs, out, collected)
 	case "gotest":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner gotest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner gotest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return gocover.Run(dir, out, collected)
 	case "dotnet":
 		if repoRoot == "" {
 			repoRoot = "." // dotnetcover's historical default
 		}
-		return dotnetcover.Run(project, repoRoot, out, collected, timings, covMode, filter, only, jobs)
+		return dotnetcover.Run(project, repoRoot, out, collected, timings, covMode, filter, only, listOnly, jobs)
 	case "jest":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner jest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner jest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return jestcover.Run(dir, repoRoot, out, collected)
 	case "junit":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner junit yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner junit yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return jvmcover.Run(dir, repoRoot, sourceRoot, out, collected)
 	case "rspec":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner rspec yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner rspec yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return rbcover.Run(dir, repoRoot, out, collected)
 	case "cargo":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner cargo yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner cargo yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return rustcover.Run(dir, repoRoot, out, collected)
 	case "phpunit":
-		if only != "" {
-			return fmt.Errorf("-only is not supported for -runner phpunit yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
+		if only != "" || listOnly {
+			return fmt.Errorf("-only/-list-only are not supported for -runner phpunit yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
 		}
 		return phpcover.Run(dir, repoRoot, phpunitBin, out, collected)
 	case "":
