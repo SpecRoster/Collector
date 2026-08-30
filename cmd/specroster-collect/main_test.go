@@ -40,7 +40,7 @@ func TestDispatchGotest(t *testing.T) {
 // let the action tell the server "I re-collected these 40 tests" when it
 // actually re-collected all 3,000 — a claim the merge would act on.
 func TestOnlyIsRefusedWhereUnsupported(t *testing.T) {
-	for _, runner := range []string{"pytest", "gotest", "jest", "junit", "rspec", "cargo", "phpunit"} {
+	for _, runner := range []string{"pytest", "jest", "junit", "rspec", "cargo", "phpunit"} {
 		err := dispatch(runner, ".", "", "o.json", "c.txt", "", "t.json", "msbuild", "", "plan.txt", "", false, 1,
 			"src/main/java", "vendor/bin/phpunit", "python", "")
 		if err == nil {

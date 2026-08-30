@@ -70,10 +70,7 @@ func dispatch(runner, dir, repoRoot, out, collected, project, timings, covMode, 
 		}
 		return pytestcover.Run(dir, python, pytestArgs, out, collected)
 	case "gotest":
-		if only != "" || listOnly {
-			return fmt.Errorf("-only/-list-only are not supported for -runner gotest yet; it would be ignored and the server would be told a subset was re-collected when the whole suite was")
-		}
-		return gocover.Run(dir, out, collected)
+		return gocover.Run(dir, out, collected, only, listOnly)
 	case "dotnet":
 		if repoRoot == "" {
 			repoRoot = "." // dotnetcover's historical default

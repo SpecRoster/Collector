@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SpecRoster/Collector/runner/gotest"
@@ -22,7 +23,7 @@ func TestCollectorEndToEnd(t *testing.T) {
 	covPath := filepath.Join(tmp, "coverage.json")
 	colPath := filepath.Join(tmp, "collected.txt")
 
-	if err := run("testdata/sample", covPath, colPath); err != nil {
+	if err := run("testdata/sample", covPath, colPath, "", false); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -111,4 +112,59 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// The contract incremental snapshots rest on, for Go: collect a subset, but
+// still report every test that exists. If the inventory shrank to the subset,
+// the server would read every test outside it as deleted and erase it.
+func TestOnlyCollectsSubsetButReportsFullInventory(t *testing.T) {
+	tmp := t.TempDir()
+	covPath := filepath.Join(tmp, "coverage.json")
+	colPath := filepath.Join(tmp, "collected.txt")
+	invPath := filepath.Join(tmp, "inventory.txt")
+
+	// First, learn the inventory without collecting anything.
+	if err := run("testdata/sample", covPath, invPath, "", true); err != nil {
+		t.Fatalf("list-only: %v", err)
+	}
+	if _, err := os.Stat(covPath); err == nil {
+		t.Error("a list-only pass wrote coverage; it must not look like it collected")
+	}
+	inv := strings.Fields(strings.TrimSpace(readFile(t, invPath)))
+	if len(inv) < 2 {
+		t.Fatalf("inventory = %v, want the whole sample suite", inv)
+	}
+
+	// Now collect exactly one of them.
+	target := strings.ReplaceAll(inv[0], "::", ".")
+	onlyPath := filepath.Join(tmp, "only.txt")
+	if err := os.WriteFile(onlyPath, []byte(target+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("testdata/sample", covPath, colPath, onlyPath, false); err != nil {
+		t.Fatalf("subset run: %v", err)
+	}
+
+	var doc gotest.CoverJSON
+	if err := json.Unmarshal([]byte(readFile(t, covPath)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Tests) != 1 {
+		t.Errorf("collected %d tests, want 1: %v", len(doc.Tests), doc.Tests)
+	}
+	if _, ok := doc.Tests[target]; !ok {
+		t.Errorf("coverage does not contain the requested test %q", target)
+	}
+	if got := len(strings.Fields(strings.TrimSpace(readFile(t, colPath)))); got != len(inv) {
+		t.Errorf("inventory shrank to %d entries, want all %d — a subset run must still report the whole suite", got, len(inv))
+	}
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

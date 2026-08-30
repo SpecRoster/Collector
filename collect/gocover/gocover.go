@@ -34,11 +34,11 @@ import (
 
 // Run collects per-test coverage for the Go module at dir, writing the
 // coverage JSON to out and the collected test list to collected.
-func Run(dir, out, collected string) error {
-	return run(dir, out, collected)
+func Run(dir, out, collected, only string, listOnly bool) error {
+	return run(dir, out, collected, only, listOnly)
 }
 
-func run(dir, outPath, collectedPath string) error {
+func run(dir, outPath, collectedPath, onlyPath string, listOnly bool) error {
 	module, err := modulePath(dir)
 	if err != nil {
 		return err
@@ -46,6 +46,13 @@ func run(dir, outPath, collectedPath string) error {
 	pkgs, err := goLines(dir, "list", "./...")
 	if err != nil {
 		return fmt.Errorf("go list: %w", err)
+	}
+
+	// An incremental run collects only what SpecRoster asked for, while still
+	// reporting the COMPLETE inventory: listing is cheap, collecting is not.
+	only, err := readOnly(onlyPath)
+	if err != nil {
+		return err
 	}
 
 	doc := gotest.CoverJSON{Format: gotest.CoverageFormat, Module: module, Tests: map[string]map[string][]int{}}
@@ -57,7 +64,19 @@ func run(dir, outPath, collectedPath string) error {
 			return fmt.Errorf("list tests in %s: %w", pkg, err)
 		}
 		for _, test := range tests {
+			// The inventory records every test that EXISTS, before any
+			// collection is attempted.
 			natives = append(natives, pkg+"::"+test)
+			if listOnly {
+				continue
+			}
+			// Canonical id is pkg.Test — the same key doc.Tests uses and the
+			// form a collection plan names.
+			if only != nil {
+				if _, want := only[pkg+"."+test]; !want {
+					continue
+				}
+			}
 			files, err := coverOneTest(dir, pkg, test, module)
 			if err != nil {
 				return fmt.Errorf("cover %s.%s: %w", pkg, test, err)
@@ -67,6 +86,11 @@ func run(dir, outPath, collectedPath string) error {
 			}
 			fmt.Fprintf(os.Stderr, "covered %s.%s (%d files)\n", pkg, test, len(files))
 		}
+	}
+
+	if listOnly {
+		sort.Strings(natives)
+		return os.WriteFile(collectedPath, []byte(strings.Join(natives, "\n")+"\n"), 0o644)
 	}
 
 	f, err := os.Create(outPath)
@@ -204,4 +228,24 @@ func goLines(dir string, args ...string) ([]string, error) {
 		}
 	}
 	return lines, nil
+}
+
+// readOnly loads the canonical test IDs an incremental run must re-collect.
+// An empty path means "collect everything" (a full run); a present but empty
+// file means "collect nothing", the correct no-op on an unchanged repository.
+func readOnly(path string) (map[string]struct{}, error) {
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read -only list: %w", err)
+	}
+	only := map[string]struct{}{}
+	for _, line := range strings.Split(string(b), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			only[line] = struct{}{}
+		}
+	}
+	return only, nil
 }
