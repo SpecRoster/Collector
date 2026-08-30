@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SpecRoster/Collector/runner/dotnet"
@@ -28,7 +29,7 @@ func TestCollectorEndToEnd(t *testing.T) {
 	timPath := filepath.Join(tmp, "timings.json")
 
 	// No -project: discovery must find BOTH test projects and merge them.
-	if err := run("", "testdata/sample", covPath, colPath, timPath, "msbuild", "", 2); err != nil {
+	if err := run("", "testdata/sample", covPath, colPath, timPath, "msbuild", "", "", 2); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -119,4 +120,60 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// TestOnlyCollectsSubsetButReportsFullInventory pins the contract incremental
+// snapshots depend on: collection is expensive so it is restricted, but
+// LISTING is cheap so the inventory stays complete. The server uses that
+// inventory to tell "not re-collected, carry it forward" from "deleted, drop
+// it" — if the inventory shrank to the subset, every test outside it would
+// look deleted and be erased from the snapshot.
+func TestOnlyCollectsSubsetButReportsFullInventory(t *testing.T) {
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip("dotnet SDK not on PATH")
+	}
+	if testing.Short() {
+		t.Skip("short mode")
+	}
+	tmp := t.TempDir()
+	covPath := filepath.Join(tmp, "coverage.json")
+	colPath := filepath.Join(tmp, "collected.txt")
+	onlyPath := filepath.Join(tmp, "only.txt")
+
+	const target = "Demo.Tests.CalculatorTests.AddWorks"
+	if err := os.WriteFile(onlyPath, []byte(target+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("", "testdata/sample", covPath, colPath, "", "msbuild", "", onlyPath, 2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	raw, err := os.ReadFile(covPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc dotnet.CoverJSON
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Tests) != 1 {
+		t.Errorf("collected coverage for %d tests, want 1: %v", len(doc.Tests), testNames(doc))
+	}
+	if doc.Tests[target] == nil {
+		t.Errorf("no coverage for the requested test %q; have %v", target, testNames(doc))
+	}
+
+	inventory, err := os.ReadFile(colPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := 0
+	for _, l := range strings.Split(strings.TrimSpace(string(inventory)), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines++
+		}
+	}
+	if lines <= 1 {
+		t.Errorf("inventory has %d entries, want the whole suite — a subset run must still report every test that exists", lines)
+	}
 }

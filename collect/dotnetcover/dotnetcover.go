@@ -46,8 +46,8 @@ import (
 
 // Run collects per-test coverage for the .NET test project(s), writing the
 // coverage JSON, collected test list, and per-test timings.
-func Run(project, repoRoot, out, collected, timings, covMode, filter string, jobs int) error {
-	return run(project, repoRoot, out, collected, timings, covMode, filter, jobs)
+func Run(project, repoRoot, out, collected, timings, covMode, filter, only string, jobs int) error {
+	return run(project, repoRoot, out, collected, timings, covMode, filter, only, jobs)
 }
 
 // DefaultJobs is the default -jobs concurrency (exported for the cmd wrappers).
@@ -68,7 +68,7 @@ func defaultJobs() int {
 	return n
 }
 
-func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter string, jobs int) error {
+func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter, onlyPath string, jobs int) error {
 	if jobs < 1 {
 		jobs = 1
 	}
@@ -102,6 +102,15 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 		fmt.Fprintf(os.Stderr, "discovered %d test project(s): %s\n", len(projects), strings.Join(projects, ", "))
 	}
 
+	// An incremental run collects coverage for only the tests SpecRoster asked
+	// for, but still reports the COMPLETE inventory below — listing is cheap
+	// where collection is not, and the server needs the whole suite to tell a
+	// test it did not re-collect from one that no longer exists.
+	only, err := readOnly(onlyPath)
+	if err != nil {
+		return err
+	}
+
 	doc := dotnet.CoverJSON{Format: dotnet.CoverageFormat, Tests: map[string]map[string][]int{}}
 	timings := timingDoc{Format: timingFormat, DurationsMs: map[string]int64{}}
 	var natives []string
@@ -116,9 +125,29 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 			return err
 		}
 		total += len(fqns)
-		covered, failed := coverProject(proj, fqns, absRoot, covMode, jobs, &doc, &natives, timings.DurationsMs)
+
+		// The inventory is every test that EXISTS, recorded before any
+		// collection is attempted. Deriving it from collection results
+		// instead would drop a test that failed to produce coverage, and the
+		// server would read that absence as "this test was deleted".
+		for _, fqn := range fqns {
+			if class, method, ok := splitFQN(fqn); ok {
+				natives = append(natives, class+"::"+method)
+			}
+		}
+
+		toCover := fqns
+		if only != nil {
+			toCover = toCover[:0:0]
+			for _, fqn := range fqns {
+				if _, want := only[fqn]; want {
+					toCover = append(toCover, fqn)
+				}
+			}
+		}
+		covered, failed := coverProject(proj, toCover, absRoot, covMode, jobs, &doc, timings.DurationsMs)
 		failures += failed
-		fmt.Fprintf(os.Stderr, "project %s: covered %d/%d (%d failed)\n", proj, covered, len(fqns), failed)
+		fmt.Fprintf(os.Stderr, "project %s: covered %d/%d discovered (%d failed)\n", proj, covered, len(fqns), failed)
 	}
 	if total == 0 {
 		return fmt.Errorf("no tests discovered in %s", strings.Join(projects, ", "))
@@ -126,7 +155,10 @@ func run(project, repoRoot, outPath, collectedPath, timingsPath, covMode, filter
 	if failures > 0 {
 		fmt.Fprintf(os.Stderr, "WARNING: %d test(s) failed to cover and were skipped (e.g. need infrastructure); coverage is partial\n", failures)
 	}
-	if len(doc.Tests) == 0 {
+	if len(doc.Tests) == 0 && (only == nil || len(only) > 0) {
+		// With -only naming zero tests there is genuinely nothing to collect:
+		// the suite is unchanged and fully profiled. That is the success case
+		// for an incremental run, not a misconfiguration.
 		return fmt.Errorf("no tests produced coverage (%d discovered, all failed) — check -cov-mode and that the project references the matching coverlet package", total)
 	}
 
@@ -175,7 +207,7 @@ type coverResult struct {
 // Results are merged on the calling goroutine, so doc/natives/timings need no
 // locking. A test that fails to cover is logged and skipped, not fatal.
 func coverProject(project string, fqns []string, absRoot, covMode string, jobs int,
-	doc *dotnet.CoverJSON, natives *[]string, timings map[string]int64) (covered, failed int) {
+	doc *dotnet.CoverJSON, timings map[string]int64) (covered, failed int) {
 
 	work := make(chan string)
 	results := make(chan coverResult)
@@ -209,8 +241,6 @@ func coverProject(project string, fqns []string, absRoot, covMode string, jobs i
 			continue
 		}
 		covered++
-		class, method, _ := splitFQN(r.fqn)
-		*natives = append(*natives, class+"::"+method)
 		if len(r.files) > 0 {
 			doc.Tests[r.fqn] = r.files
 		}
@@ -584,4 +614,26 @@ func parseCoverlet(path, absRoot string) (map[string][]int, error) {
 		out[file] = lines
 	}
 	return out, nil
+}
+
+// readOnly loads the set of canonical test IDs an incremental run was asked
+// to re-collect, one per line. An empty path means "collect everything",
+// which is a FULL run; a present-but-empty file means "collect nothing",
+// which is a legitimate incremental no-op on an unchanged repository. Those
+// two must not collapse into one another.
+func readOnly(path string) (map[string]struct{}, error) {
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read -only list: %w", err)
+	}
+	only := map[string]struct{}{}
+	for _, line := range strings.Split(string(b), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			only[line] = struct{}{}
+		}
+	}
+	return only, nil
 }
